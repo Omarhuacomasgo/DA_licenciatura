@@ -15,14 +15,14 @@ format:
     number-sections: true
     code-fold: false
     code-overflow: scroll
-    df-print: paged
+    df-print: kable
     highlight-style: github
 editor: 
   markdown: 
     wrap: 72
 ---
 
-```{r}
+```{r, include =FALSE}
 #| label: setup
 #| include: false
 
@@ -37,34 +37,45 @@ knitr::opts_knit$set(
   
 ```
 
-```{r, message = FALSE, results= 'hide'}
 
-library(tidyverse)
-library(readxl)
-library(writexl)
-library(skimr)
-library(kableExtra)
-library(forcats)
-library(mice)
-library(dplyr)
-library(ggplot2)
-library(naniar)
+# Resumen
 
+Este flujo de trabajo resume el procesamiento de datos aplicado a una muestra de electores al nivel distrital. 
 
-lapply(c("tidyverse", "readxl", "writexl", "modelsummary", "haven", "janitor", "labelled", "forcats", "stringr"), 
-       library,  character.only = TRUE)
+```{r setup-libraries, include=TRUE, warning=FALSE}
+
+lapply(c(
+  "tidyverse",  
+  "readxl",       
+  "writexl",
+  "skimr",
+  "kableExtra",
+  "mice",
+  "miceadds",
+  "naniar",
+  "modelsummary",
+  "haven",
+  "janitor",
+  "labelled",
+  "estimatr",
+  "MASS",
+  "pscl",
+  "psych",
+  "mirt",
+  "sandwich",
+  "lmtest"
+), library, character.only = TRUE)
 
 ```
 
 # Data wrangling
 
 
-```{r}
+```{r importaciondedatos}
 cdl <- read_xlsx("E:/Bases de datos/datasets_private/Dataset de encuestas.xlsx") %>% 
-  select(-n_case, -duracion, -zona, -object, -viatype,
+  dplyr::select(-n_case, -duracion, -zona, -object, -viatype,
          -vianame, -n_vivenda, -nacionalidad, -residencia) %>% 
-  
-  mutate(
+  dplyr::mutate(
     across(where(is.character),
            ~ .x %>% 
              str_squish() %>%                 # elimina espacios extra
@@ -77,20 +88,19 @@ cdl <- read_xlsx("E:/Bases de datos/datasets_private/Dataset de encuestas.xlsx")
 
 Detectamos cadenas de texto para transformarlas a factor. Luego, nos aseguramos que las variables numéricas sean leídas como tal. Creamos una lista de caracteres que representan el universo de categorías ordinales que existen en la base de datos. 
 
-```{r}
+```{r transformacionglobal}
 cdl <- cdl %>% mutate(across(where(is.character), as_factor)) %>%
   mutate(across(where(is.numeric), as.numeric))
 ```
 
 
-```{r}
+```{r catalogodenivelesordinales}
 # 1. Catálogos de niveles en el orden deseado ------------------------------
 niveles <- list(
 confianza     = c("Nada", "Poco", "Algo", "Mucho"),
-estratos      = c("Medio", "Medio alto"),
 satisfaccion  = c("Muy insatisfecho", "Insatisfecho", "Satisfecho", "Muy satisfecho"),
 calidad       = c("Muy malo", "Malo", "Regular", "Bueno", "Muy bueno"),
-acuerdo       = c("Muy en desacuerdo", "En desacuerdo","De acuerdo",    "Muy de acuerdo"),
+acuerdo       = c("Muy en desacuerdo", "En desacuerdo","De acuerdo", "Muy de acuerdo"),
 aprobacion    = c("Lo desaprueba firmemente", "Lo desaprueba", "No aprueba, pero lo entiende", "Solo lo aprueba", "Lo aprueba firmemente"),
 sistema       = c("A veces un gobierno autoritario es mejor", "En realidad me da igual", "Siempre es preferible la democracia"), 
 educa         = c("Primaria" , "Secundaria", "Superior"))
@@ -99,7 +109,7 @@ educa         = c("Primaria" , "Secundaria", "Superior"))
 
 Definimos una funcion que nos permita ordenar los niveles de cada variable ordinal tomando en cuenta 
 
-```{r}
+```{r funcion-organizadora-de-listas-ordinales}
 ordenar_factor <- function(x, cat_list = niveles, tol = 0.9) {
   # Solo procesa texto / factores
   if (!is.character(x) && !is.factor(x)) return(x)
@@ -120,16 +130,10 @@ ordenar_factor <- function(x, cat_list = niveles, tol = 0.9) {
   
   x  # No se encontró catálogo adecuado
 }
-```
 
-
-```{r}
 # Aplicación en todo el data-frame
 cdl <- cdl %>% mutate(across(where(~ is.character(.x) | is.factor(.x)), ordenar_factor))
-```
 
-
-```{r}
 skimr::skim(cdl) %>% as_tibble()
 ```
 
@@ -137,25 +141,25 @@ skimr::skim(cdl) %>% as_tibble()
 
 ### Detección de patrones
 
-```{r}
+```{r datos-perdidos-naniar}
 # 1a. Resumen general
 naniar::miss_var_summary(cdl) %>% as_tibble()
 ```
 
 
-```{r}
+```{r naniar-ggmiss}
 # % de NA por variable
 naniar::gg_miss_upset(cdl, nsets = 8)
 ```
 
 
-```{r}
+```{r naniar-vismiss}
 # patrones conjuntos
 vis_miss(cdl, sort_miss = TRUE)             # mapa de calor
 ```
 
 
-```{r}
+```{r prueba-mcar}
 # 1b. Prueba MCAR (Little)
 mcar_test <- naniar::mcar_test(cdl)
 mcar_test %>% as_tibble()
@@ -164,55 +168,44 @@ mcar_test %>% as_tibble()
 ### Seleccion de variables a imputar
 
 
-```{r}
-# ── 1. Vector con los ítems de confianza (trust_*) ──────────────────────────
+```{r variables-por-tipo-a-imputar}
+# 1. Vector con los ítems de confianza (trust_*)
 vars_trust <- names(cdl) %>% 
   str_subset("(?i)^trust")          # (?i) = búsqueda sin distinción de mayúsculas
 
-# ── 2. Resto de variables ordinales (excluye las trust)
+# 2. Resto de variables ordinales (excluye las trust)
 vars_ordinal <- names(cdl)[sapply(cdl, is.ordered)]%>% 
   setdiff(vars_trust)
 
-# ── 3. Variables nominales (factor sin orden) 
+# 3. Variables nominales 
 vars_nominal <- names(cdl)[sapply(cdl, \(x) is.factor(x) && !is.ordered(x))]
 
-# ── 4. Variables numéricas 
+# 4. Variables numéricas 
 vars_numeric <- names(cdl)[sapply(cdl, is.numeric)]
 
-```
+## Vectores ya definidos
 
-```{r, message=FALSE, warning=FALSE}
-library(tidyverse)
-library(mice)
-library(miceadds)
-
-## 1. Vectores ya definidos ---------------------------
-# vars_trust, vars_ordinal, vars_nominal, vars_numeric
 imp_vars <- c(vars_trust, vars_ordinal, vars_nominal, vars_numeric)
 
 ## 2. Asegura clase 'ordered' para trust + ordinales ---
-cdl <- cdl %>% 
-  mutate(across(all_of(c(vars_trust, vars_ordinal)),
-                ~ factor(.x, ordered = TRUE)))
+cdl <- cdl %>%   mutate(across(all_of(c(vars_trust, vars_ordinal)),
+                               ~ factor(.x, ordered = TRUE)))
 ```
 
 
-```{r}
+```{r matrix-preditors}
 ## 3. Matriz de predictores usa quickpred pero baja el umbral a .05 porque el %.NA es pequeño
 predM <- quickpred(cdl[imp_vars], mincor = .05, include = "all")
-```
 
-
-```{r}
 # añade explícitamente edad y sexo como predictores universales
 predM[ , c("edad", "sexo")] <- 1   
 
-## 4. Vector de métodos por columna --------------------
+## 4. Vector de métodos por columna
 meth <- make.method(cdl[imp_vars])
 ```
 
 
-```{r}
+```{r defnicion-metodos-imputacion}
 meth[vars_numeric]               <- "pmm"      # robusto para pequeñas n
 meth[c(vars_trust, vars_ordinal)]<- "polr"
 meth[vars_nominal] <- if_else(
@@ -222,7 +215,7 @@ meth[vars_nominal] <- if_else(
 
 ### Proceso de imputación 
 
-```{r}
+```{r imputacio-en-base-a-metodos}
 ## 5. Imputación 
 set.seed(2025)
 imp <- mice(cdl[imp_vars],
@@ -234,7 +227,7 @@ imp <- mice(cdl[imp_vars],
             printFlag       = FALSE)
 ```
 
-```{r}
+```{r primer-data-set-completo}
 # 1. Primer data-set completo (imputación 1)
 cdl_imp <- complete(imp, 1)
 
@@ -244,18 +237,18 @@ vars_miss <- names(which(colSums(is.na(cdl)) > 0))
 
 ### Comparación de datos originales vs. imputados
 
-```{r, fig.width=10, fig.height=10}
+```{r, fig.width=14, fig.height=20}
 # Densidades observadas vs imputadas
 
 cdl_imp  <- complete(imp, 1)                          # primer set imputado
 vars_miss <- names(which(colSums(is.na(cdl)) > 0))    # columnas con NA
 
 bind_rows(
-  cdl      %>% select(all_of(vars_miss)) %>% 
-              mutate(across(everything(), as.numeric),
+  cdl      %>% dplyr::select(all_of(vars_miss)) %>% 
+               dplyr::mutate(across(everything(), as.numeric),
                      .src = "Observado"),
-  cdl_imp  %>% select(all_of(vars_miss)) %>% 
-              mutate(across(everything(), as.numeric),
+  cdl_imp  %>% dplyr::select(all_of(vars_miss)) %>% 
+               dplyr::mutate(across(everything(), as.numeric),
                      .src = "Imputado")
 ) %>% 
   pivot_longer(-.src, names_to = "variable", values_to = "valor") %>% 
@@ -263,19 +256,18 @@ bind_rows(
   ggplot(aes(x = valor, colour = .src, fill = .src)) +
   geom_density(alpha = .35) +
   facet_wrap(~ variable, scales = "free", ncol = 3) +
-  scale_colour_manual(values = c(Observado = "#1F77B4",
-                                 Imputado  = "#D62728"), name = "") +
-  scale_fill_manual(values   = c(Observado = "#1F77B4",
-                                 Imputado  = "#D62728"), name = "") +
+  scale_colour_manual(values = c(Observado = "#008B8B",
+                                 Imputado  = "#F08080"), name = "") +
+  scale_fill_manual(values   = c(Observado = "#008B8B",
+                                 Imputado  = "#F08080"), name = "") +
   labs(title = "Densidades observadas vs imputadas",
        y = "Densidad", x = NULL) +
-  theme_minimal(base_size = 11) +
+  theme_grey(base_size = 20) +
   theme(legend.position = "bottom")
 
 ```
 
-
-```{r}
+```{r creardf-imputados}
 # 1. Primer data-set imputado
 cdl_imp <- complete(imp, 1)
 
@@ -284,7 +276,7 @@ vars_miss <- names(which(colSums(is.na(cdl)) > 0))
 ```
 
 
-```{r}
+```{r analisis-descriptivo-post-imputacion}
 # 3. Tabla de medias, medianas y varianzas
 tabla_stats <- tibble(variable = vars_miss) %>% 
   rowwise() %>% 
@@ -295,8 +287,7 @@ tabla_stats <- tibble(variable = vars_miss) %>%
     mean_imp    = mean  (as.numeric(cdl_imp[[variable]]), na.rm = TRUE),
     median_imp  = median(as.numeric(cdl_imp[[variable]]), na.rm = TRUE),
     var_imp     = var   (as.numeric(cdl_imp[[variable]]), na.rm = TRUE)
-  ) %>% 
-  ungroup()
+  ) %>%   ungroup()
 
 # 4. Imprime en una tabla ordenada
 tabla_stats %>% 
@@ -309,11 +300,9 @@ tabla_stats %>%
 ```
 
 
-
-```{r, fig.width=10, fig.height=10}
+```{r reemplazo-df-imputado-en-base-original}
 ## 7. Sustituye primera imputación y guarda ------------
 cdl[imp_vars] <- complete(imp, 1)
-
 ```
 
 ## Análisis descriptivo
@@ -323,10 +312,10 @@ skimr::skim(cdl) %>% as_tibble()
 ```
 ### Distribuciones (Gráficos)
 
-```{r, fig.height=10, fig.width=10}
-# ── Distribución de todas las variables numéricas ───────────────────────────
+```{r variables-numericas, fig.height=14, fig.width=15}
+# ── Distribución de todas las variables numéricas
 cdl %>% 
-  select(where(is.numeric)) %>%                       # sólo numéricas
+  dplyr::select(where(is.numeric)) %>%                       # sólo numéricas
   pivot_longer(everything(), names_to = "variable",
                values_to = "valor") %>% 
   ggplot(aes(x = valor)) +
@@ -334,15 +323,14 @@ cdl %>%
   facet_wrap(~ variable, scales = "free", ncol = 3) +
   labs(title = "Distribución de variables numéricas",
        x = NULL, y = "Frecuencia") +
-  theme_minimal(base_size = 11)
+  theme_grey(base_size = 14)
 ```
 
 
-```{r, fig.height=15, fig.width=10}
-# ── Frecuencias de todas las variables categóricas ─────────────────────────
+```{r variable-no-numerica, fig.height=15, fig.width=10}
 
 cdl %>% 
-  select(where(is.factor)) %>%                       # sólo factores
+  dplyr::select(where(is.factor)) %>%                       # sólo factores
   mutate(across(everything(), as.character)) %>%     # homogeneiza tipo
   pivot_longer(everything(),
                names_to  = "variable",
@@ -355,7 +343,7 @@ cdl %>%
   coord_flip() +
   labs(title = "Frecuencias de variables categóricas",
        x = NULL, y = "Conteo") +
-  theme_minimal(base_size = 12) +
+  theme_minimal(base_size = 14) +
   theme(axis.text.y = element_text(size = 10),        # texto más grande
         legend.position = "none")
 
@@ -366,8 +354,6 @@ cdl %>%
 # Análisis de variable de interés
 
 ## El apoyo político como constructo
-
-
 
 ### Dimension 1: Apego a la comunidad
 
@@ -399,7 +385,6 @@ Tolerancia al pronunciamiento de opositores al alcalde en medios de comunicació
 
 
 ```{r}
-
 # 1. Diccionario de recodificación 
 numero <- c("Nada"  = 0,"Poco"  = 1, "Algo"  = 2,  "Mucho" = 3)
 
@@ -412,18 +397,13 @@ vars_trust <- cdl %>% dplyr::  mutate(across(dplyr::starts_with("trust"),
 matriz_rho <- vars_trust %>%   as.data.frame() %>%                        
   psych::polychoric(smooth = TRUE) %>% magrittr::extract2("rho")
 
-
 matriz_rho %>% as_tibble()
-
 
 ```
 
 
 
-
 ```{r}
-library(psych)
-
 alpha_result <- vars_trust %>%  psych::alpha()
 alpha_general_df <- as.data.frame(alpha_result$total)
 alpha_general_df %>% as_tibble()
@@ -449,6 +429,8 @@ alpha_items_df %>% as_tibble()
 
 ## La tolerancia al clientelismo
 
+### Analisis de confiabilidad 
+
 ```{r}
 alpha_result <- cdl %>% dplyr::select(cl_bien, cl_bono, cl_din, cl_emp) %>%  psych::alpha()
 alpha_general_df <- as.data.frame(alpha_result$total)
@@ -460,7 +442,6 @@ alpha_general_df %>% as_tibble()
 alpha_items_df <- as.data.frame(alpha_result$item.stats) 
 alpha_items_df %>% as_tibble()
 ```
-
 
 
 ## Partidismo negativo
@@ -484,7 +465,7 @@ alpha_items_df %>% as_tibble()
 Seleccionamos primero todos los items
 
 ```{r}
-library(mirt)
+
 nps_data1 <- cdl %>% dplyr:: select(nps_1, nps_2, nps_3, nps_4, nps_5) %>%
   mutate(across(everything(), as.numeric))
 
@@ -542,261 +523,156 @@ cdl <- cdl %>%
 ```
 
 
+## Tolerancia a la protesta
+
+```{r}
+### Analisis de confiabilidad 
+alpha_result <- cdl %>% dplyr::select(vd_1, vd_2, vd_3) %>%  psych::alpha()
+alpha_general_df <- as.data.frame(alpha_result$total)
+alpha_general_df %>% as_tibble()
+```
+
+```{r}
+
+alpha_items_df <- as.data.frame(alpha_result$item.stats) 
+alpha_items_df %>% as_tibble()
+```
+
 ```{r}
 # 1. Centrado y escalado numéricas
-library(tidyverse)
-library(forcats)
+
 
 cdl_t <- cdl %>% 
-  # A. Centrar y escalar numéricas seleccionadas
-  mutate(across(c(edad, d7, starts_with("vd_")), ~ as.numeric(scale(.x)))) %>% 
+  # 1. Centrar y escalar numéricas seleccionadas (incluye vd_1, vd_2, vd_3)
+  mutate(across(c(edad, d7, starts_with("vd_")), 
+                ~ as.numeric(scale(.x)))) %>% 
   
-  # B. Reubicar categorías con ≤ 5 casos en "Otro"
-  mutate(across(any_of(c("negp", "clien4a")),
+  # 2. Reubicar categorías con ≤ 5 casos en "Otro"
+  mutate(across(any_of(c("negp", "clien4a")), 
                 ~ fct_lump_min(.x, min = 5, other_level = "Otro"))) %>% 
   
-  # C. Índice de confianza ciudadana (promedio de trust1–trust7)
-  mutate(trust_index = rowMeans(across(trust1:trust7, ~ as.numeric(.x)),
-                                na.rm = TRUE))
-
-# Contrastes polinómicos activados para todas las variables ordinales
-options(contrasts = c("contr.poly", "contr.poly"))
+  # 3. Índices compuestos
+  mutate(
+    trust_index         = rowMeans(across(trust1:trust7, ~ as.numeric(.x)),    na.rm = TRUE),
+    opos_index   = rowMeans(across(c(vd_1, vd_2, vd_3),   ~ as.numeric(.x)), na.rm = TRUE)
+  ) %>% 
+  
+  # 4–6. Recodificaciones de factores y creación de empleo_bin
+  mutate(
+    partyid    = factor(partyid, levels = c("No", "Si")),
+    sexo       = factor(sexo,    levels = c("Masculino", "Femenino")),
+    estrato    = factor(estrato, levels = c("Medio", "Medio alto")),
+    
+    ned = fct_collapse(
+      ned,
+      "Básica"   = c("Primaria", "Secundaria"),
+      "Superior" = "Superior"
+    ) %>% 
+      factor(ordered = FALSE),
+    
+    empleo_bin = case_when(
+      d6 == "Está trabajando" |
+      str_detect(d6, "^No está trabajando justo ahora") ~ "Con empleo",
+      TRUE                                              ~ "Sin empleo"
+    ) %>% 
+      factor(levels = c("Sin empleo", "Con empleo"))
+  )
 ```
+
 
 
 # Modelamiento 
 
 
-## Análisis descriptivo
-
-
-
-```{r, fig.height=10, fig.width=10}
-# ── Distribución de todas las variables numéricas ───────────────────────────
-cdl_t %>% 
-  select(where(is.numeric)) %>%                       # sólo numéricas
-  pivot_longer(everything(), names_to = "variable",
-               values_to = "valor") %>% 
-  ggplot(aes(x = valor)) +
-  geom_histogram(bins = 30, fill = "#1F77B4", colour = "white") +
-  facet_wrap(~ variable, scales = "free", ncol = 3) +
-  labs(title = "Distribución de variables numéricas",
-       x = NULL, y = "Frecuencia") +
-  theme_minimal(base_size = 11)
-```
-
-
-```{r, fig.height=15, fig.width=10}
-# ── Frecuencias de todas las variables categóricas ─────────────────────────
-cdl_t %>% 
-  select(where(is.factor)) %>%                       # sólo factores
-  mutate(across(everything(), as.character)) %>%     # homogeneiza tipo
-  pivot_longer(everything(),
-               names_to  = "variable",
-               values_to = "valor") %>% 
-  drop_na(valor) %>% 
-  mutate(valor = str_trunc(valor, 8, side = "right", ellipsis = "")) %>%  # ≤ 8 caracteres
-  ggplot(aes(x = valor)) +
-  geom_bar(fill = "#1F77B4") +
-  facet_wrap(~ variable, scales = "free", ncol = 3) +
-  coord_flip() +
-  labs(title = "Frecuencias de variables categóricas",
-       x = NULL, y = "Conteo") +
-  theme_minimal(base_size = 12) +
-  theme(axis.text.y = element_text(size = 10),        # texto más grande
-        legend.position = "none")
-
-```
-
-
 
 # Dimensión 1: Apego a la comunidad
 
-```{r}
-cdl_t <- cdl_t %>% 
-  mutate(
-    ned = fct_collapse(ned,
-                       "Básica"   = c("Primaria", "Secundaria"),
-                       "Superior" = "Superior") %>% 
-          fct_relevel("Superior") %>%                       # ref = Superior
-          factor(ordered = TRUE)                            # mantiene orden
-  )
 
-cdl_t <- cdl_t %>% 
-  mutate(
-    empleo_bin = case_when(
-      d6 == "Está trabajando" |
-        str_detect(d6, "^No está trabajando justo ahora") ~ 1,  # 1 = Con empleo
-      TRUE                                               ~ 0    # 0 = Sin empleo
-    )
-  )
-```
+## Indicador: Orgullo distrital  
 
+#### Modelos OLS 
 
-
-## Indicador: Orgullo distrital - modelos OLS   
-
-
-### Primer modelamiento
 ```{r}
 
-dim1_apego1OLS <- lm(ac_b ~ cl_index, data = cdl_t)
-dim1_apego2OLS <- lm(ac_b ~ theta_nps,  data = cdl_t)
-dim1_apego3OLS <- lm(ac_b ~ cl_index + theta_nps + ideol + partyid, data = cdl_t)
-dim1_apego4OLS <- lm(ac_b ~ cl_index + theta_nps+ ideol + partyid +  edad + sexo + ned + empleo_bin+ estrato, data = cdl_t)
-
-library(performance)
-check_model(dim1_apego1OLS)
-check_model(dim1_apego2OLS)
-check_model(dim1_apego3OLS)
-check_model(dim1_apego4OLS)
+# Ejemplo con HC3 ya en el ajuste
+d1_apego1OLS <- lm_robust(ac_b ~ cl_index,data = cdl_t,  se_type = "HC3") # Efecto independiente del clientelismo
+d1_apego2OLS <- lm_robust(ac_b ~ theta_nps, data = cdl_t, se_type = "HC3") # Efecto independiente del NPS
+d1_apego3OLS <- lm_robust(ac_b ~ cl_index + theta_nps + ideol + partyid,   data    = cdl_t,   se_type = "HC3") # Control político
+d1_apego4OLS <- lm_robust(ac_b ~ cl_index + theta_nps + ideol + partyid +  edad + sexo + ned + empleo_bin + estrato, data  = cdl_t, se_type = "HC3")
 
 ```
 
-
-### Segundo modelamiento
-
-```{r, message=FALSE, warning=FALSE}
-library(dplyr)
-library(lmtest)
-library(sandwich)
-library(modelsummary)
-
-
-# ── Modelos sin interacciones, usando polinomios ortogonales grado 2 ──────
-dim1_apego1OLS <- lm(ac_b ~ poly(cl_index, 2),  data = cdl_t)
-
-dim1_apego2OLS <- lm(ac_b ~ poly(theta_nps, 2),  data = cdl_t)
-
-dim1_apego3OLS <- lm(ac_b ~ poly(cl_index, 2) +   poly(theta_nps, 2) +  ideol + partyid,
-                     data = cdl_t)
-
-dim1_apego4OLS <- lm(ac_b ~ poly(cl_index, 2) +  poly(theta_nps, 2) +  ideol + partyid +  edad + sexo + ned + empleo_bin + estrato,
-                     data = cdl_t)
-
-
-```
-
-
-### Tablas
-
+### Tabulación 
 
 ```{r}
-# 1. Construye la lista con los objetos ya existentes
-modlist <- list(
-  dim1_apego1OLS,
-  dim1_apego2OLS,
-  dim1_apego3OLS,
-  dim1_apego4OLS)
 
-# 2. Pon nombres "1", "2", … a cada entrada
+modlist <- list(d1_apego1OLS, d1_apego2OLS, d1_apego3OLS, d1_apego4OLS)
 names(modlist) <- as.character(seq_along(modlist))
 
-
-# ── opción A: nombrar la lista ─────────────────────────────────────────────
-vcov_hc3 <- lapply(modlist, \(m) vcovHC(m, type = "HC3"))
-names(vcov_hc3) <- rep("HC3", length(vcov_hc3))      # ← aquí el cambio
-
+# 1) Guardar en Word
 modelsummary(
   modlist,
-  vcov        = vcov_hc3,
-  statistic   = "({std.error})",
-  stars       = TRUE,
-  gof_omit    = "AIC|BIC|RMSE",
-  title       = "Apego distrital – Modelos OLS con SE robustos (HC3)"
+  statistic = "({std.error})",
+  stars     = TRUE,
+  output    = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D1apego_HC3OLS.docx",
+  title     = "Apego distrital – Modelos OLS con SE HC3"
 )
 
-# ── opción B: forma compacta ───────────────────────────────────────────────
+# 2) Pintar en el informe renderizado
 modelsummary(
   modlist,
-  vcov        = "HC3",                # mismo estimador para todos
-  statistic   = "({std.error})",
-  stars       = TRUE,
-  gof_omit    = "AIC|BIC|RMSE",
-  title       = "Apego distrital – Modelos OLS con SE robustos (HC3)"
-)
+  statistic = "({std.error})",
+  stars     = TRUE,
+  title     = "Apego distrital – Modelos OLS con SE HC3")
+
 ```
 
 
 # Dimensión 2: Aprobación de valores del regimen 
-
 ## Indicador: Churchill - modelos OLS   
 
+### Especificaciones
 
-### Primer modelamiento
+```{r message=FALSE, warning=FALSE}
 
-```{r}
-
-dim2_churchill1OLS <- lm(pd_b ~ cl_index, data = cdl_t)
-dim2_churchill2OLS <- lm(pd_b ~ theta_nps,  data = cdl_t)
-dim2_churchill3OLS <- lm(pd_b ~ cl_index + theta_nps + ideol + partyid, data = cdl_t)
-dim2_churchill4OLS <- lm(pd_b ~ cl_index + theta_nps + ideol + partyid +  edad + sexo + ned + empleo_bin + estrato, data = cdl_t)
-dim2_churchill5OLS <- lm(pd_b ~ cl_index * partyid + theta_nps + ideol +  edad + sexo + ned + empleo_bin + estrato, data = cdl_t)
-dim2_churchill6OLS <- lm(pd_b ~ theta_nps * partyid + cl_index + ideol +  edad + sexo + ned + empleo_bin + estrato, data = cdl_t)
-dim2_churchill7OLS <- lm(pd_b ~ cl_index * theta_nps  + ideol + partyid + edad + sexo + ned + empleo_bin + estrato, data = cdl_t)
-dim2_churchill8OLS <- lm(pd_b ~ cl_index * theta_nps * partyid + ideol +  edad + sexo + ned + empleo_bin + estrato, data = cdl_t)
+d2_churchill1OLS <- lm_robust(pd_b ~ cl_index, data = cdl_t, se_type = "HC3")
+d2_churchill2OLS <- lm_robust(pd_b ~ theta_nps, data = cdl_t, se_type = "HC3")
+d2_churchill3OLS <- lm_robust(pd_b ~ cl_index + theta_nps + ideol + partyid,  data = cdl_t, se_type = "HC3")
+d2_churchill4OLS <- lm_robust(pd_b ~ cl_index+ theta_nps + ideol + partyid + edad + sexo + ned + empleo_bin + estrato, data = cdl_t, se_type = "HC3")
 
 ```
 
+### Tabulación
 
+```{r message=FALSE, warning=FALSE}
+modlist <- list(d2_churchill1OLS, d2_churchill2OLS, d2_churchill3OLS,  d2_churchill4OLS)
 
-```{r, fig.width=11, fig.height=10}
-check_model (dim2_churchill1OLS)
-check_model (dim2_churchill2OLS)
-check_model (dim2_churchill3OLS)
-check_model (dim2_churchill4OLS)
-check_model (dim2_churchill5OLS)
-check_model (dim2_churchill6OLS)
-check_model (dim2_churchill7OLS)
-check_model (dim2_churchill8OLS)
-
-```
-### Segundo modelamiento
-
-```{r}
-# 1. Centrar y crear cuadrados
-cdl_t <- cdl_t %>% 
-  mutate(
-    cl_index_c   = scale(cl_index,   scale = FALSE),
-    theta_nps_c  = scale(theta_nps,  scale = FALSE),
-    edad_c       = scale(edad,       scale = FALSE),
-    theta_nps_c2 = theta_nps_c^2,
-    edad_c2      = edad_c^2
-  )
-
-# 2. Reajustar los modelos con las versiones centradas/cuadráticas
-dim2_churchill1OLS <- lm(pd_b ~ cl_index_c,   data = cdl_t)
-dim2_churchill2OLS <- lm(pd_b ~ theta_nps_c,  data = cdl_t)
-dim2_churchill3OLS <- lm(pd_b ~ cl_index_c + theta_nps_c + ideol + partyid,  data = cdl_t)
-dim2_churchill4OLS <- lm(pd_b ~ cl_index_c + theta_nps_c + theta_nps_c2 +  ideol + partyid + edad_c + edad_c2 + sexo + ned + empleo_bin + estrato,data = cdl_t)
-dim2_churchill5OLS <- lm(pd_b ~ cl_index_c * partyid + theta_nps_c +  ideol + edad_c + edad_c2 + sexo + ned + empleo_bin + estrato, data = cdl_t)
-dim2_churchill6OLS <- lm(pd_b ~ theta_nps_c * partyid + cl_index_c + ideol + edad_c + edad_c2 + sexo + ned + empleo_bin + estrato, data = cdl_t)
-dim2_churchill7OLS <- lm(pd_b ~ cl_index_c * theta_nps_c + ideol + partyid + edad_c + edad_c2 + sexo + ned + empleo_bin + estrato, data = cdl_t)
-# La triple interacción (modelo 8) mantiene VIF muy alto → recomendable omitirla
-```
-
-
-```{r}
-# 4. Tabla con errores robustos HC3 y columnas numeradas
-mod2 <- list(dim2_churchill1OLS, dim2_churchill2OLS, dim2_churchill3OLS,
-             dim2_churchill4OLS, dim2_churchill5OLS, dim2_churchill6OLS,
-             dim2_churchill7OLS)
-
-names(mod2) <- as.character(seq_along(mod2))
-
+# 1) Guardar en Word
 modelsummary(
-  mod2,
-  vcov       = "HC3",
-  statistic  = "({std.error})",
-  stars      = TRUE,
-  gof_omit   = "AIC|BIC|RMSE",
-  title      = "Valoración régimen subnacional (OLS con SE HC3)"
+  modlist,
+  statistic = "({std.error})",
+  stars     = TRUE,
+  output    = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D2churchill_HC3OLS.docx",
+  title     = "Churchill – Modelos OLS con SE HC3"
 )
+
+# 2) Pintar en el informe renderizado
+modelsummary(
+  modlist,
+  statistic = "({std.error})",
+  stars     = TRUE,
+  title     = "Churchill – Modelos OLS con SE HC3"
+)
+
 ```
+
 
 ## Indicador: Democracia vs dictarua ORDINAL
 
+### Especificaciones
+
 ```{r}
+
 cdl_t <- cdl_t %>% 
   mutate(pd_c = factor(
          pd_c,  levels  = c("A veces un gobierno autoritario es mejor","En realidad me da igual",
@@ -806,8 +682,7 @@ cdl_t <- cdl_t %>%
 ```
 
 ```{r}
-library (tidyverse)
-library(MASS)
+
 
 dim2_ord1 <- MASS::polr (pd_c ~ cl_index, data = cdl_t, Hess = TRUE)
 dim2_ord2 <- MASS::polr (pd_c ~ theta_nps, data = cdl_t, Hess = TRUE)
@@ -817,54 +692,402 @@ dim2_ord4 <- MASS::polr (pd_c ~ cl_index + theta_nps + ideol + partyid +  edad +
 ```
 
 
+### Tabulación
+
+```{r}
+
+modelsummary(
+  list("1" = dim2_ord1, "2" = dim2_ord2, "3" = dim2_ord3, "4" = dim2_ord4),
+  exponentiate = TRUE,              # exponencia estimates y CI
+  statistic    = "conf.int",        # muestra CI en lugar de SE
+  conf_level   = 0.95,              # nivel 95%
+  fmt          = 2,                 # 2 decimales
+  stars        = TRUE,              # + p<.10, * p<.05, etc.
+  glance       = list(~ tibble(
+    Observaciones = nobs(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  title        = "Odds Ratios, IC 95% y McFadden’s R²",
+  notes        = "IC al 95%; códigos: + p<0.10; * p<0.05; ** p<0.01; *** p<0.001",
+  output       = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D2democracia_vs_autho.ORD.docx"
+)
 
 
-```{r, fig.width=40, fig.height=10}
-performance::check_model( dim2_ord1, residual_type = "normal" )
-performance::check_model( dim2_ord2, residual_type = "normal" )
-performance::check_model( dim2_ord3, residual_type = "normal" )
-performance::check_model( dim2_ord4, residual_type = "normal" )
+modelsummary(
+  list("1"=dim2_ord1, "2"=dim2_ord2, "3"=dim2_ord3, "4"=dim2_ord4),
+  exponentiate = TRUE,            # exponcia estimates y CI
+  statistic    = "conf.int",      # muestra CI en lugar de SE
+  conf_level   = 0.95,            # nivel 95%
+  fmt          = 2,               # 2 decimales
+  stars        = TRUE,            # + p<.10, * p<.05, etc.
+  glance       = list(~ tibble(
+    Observaciones = nobs(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  title        = "Democracia vs autoritarismo - Ordinal"
+)
+```
+
+
+### Indicador: Tolerancia a la oposición
+
+#### Especifcaciones
+
+
+```{r}
+
+# Ejemplo con HC3 ya en el ajuste
+d2_opo1OLS <- lm_robust(opos_index ~ cl_index,data = cdl_t,  se_type = "HC3") # Efecto independiente del clientelismo
+d2_opo2OLS <- lm_robust(opos_index~ theta_nps, data = cdl_t, se_type = "HC3") # Efecto independiente del NPS
+d2_opo3OLS <- lm_robust(opos_index~ cl_index + theta_nps + ideol + partyid,   data    = cdl_t,   se_type = "HC3") # Control político
+d2_opo4OLS <- lm_robust(opos_index~ cl_index + theta_nps + ideol + partyid +  edad + sexo + ned + empleo_bin + estrato, data  = cdl_t, se_type = "HC3")
+
+```
+
+
+#### Tablas
+
+
+```{r}
+modlist <- list(d2_opo1OLS, d2_opo2OLS, d2_opo3OLS, d2_opo4OLS)
+
+# 1) Guardar en Word
+modelsummary(
+  modlist,
+  statistic = "({std.error})",
+  stars     = TRUE,
+  output    = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D2oposición_HC3OLS.docx",
+  title     = "Tolerancia a la oposición – Modelos OLS con SE HC3"
+)
+
+# 2) Pintar en el informe renderizado
+modelsummary(
+  modlist,
+  statistic = "({std.error})",
+  stars     = TRUE,
+  title     = "Tolerancia a la oposición – Modelos OLS con SE HC3"
+)
+
+```
+
+
+# Dimensión 3: Evaluación del desempeño del régimen
+
+## Indicador: Confianza institucional 
+
+
+### Especificaciones
+
+```{r}
+
+d3_trust1OLS <- lm_robust(trust_index ~ cl_index, data = cdl_t, se_type = "HC3")
+d3_trust2OLS <- lm_robust(trust_index ~ theta_nps, data = cdl_t, se_type = "HC3")
+d3_trust3OLS <- lm_robust(trust_index~ cl_index + theta_nps + ideol + partyid,  data = cdl_t, se_type = "HC3")
+d3_trust4OLS <- lm_robust(trust_index ~ cl_index+ theta_nps + ideol + partyid + edad + sexo + ned + empleo_bin + estrato, data = cdl_t, se_type = "HC3")
+
+```
+
+### Tabulación
+
+```{r}
+modlist <- list(d3_trust1OLS, d3_trust2OLS, d3_trust3OLS,  d3_trust4OLS)
+
+# 1) Guardar en Word
+modelsummary(
+  modlist,
+  statistic = "({std.error})",
+  stars     = TRUE,
+  output    = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D3trust_HC3OLS.docx",
+  title     = "Indice de confianza institucional – Modelos OLS con SE HC3"
+)
+
+# 2) Pintar en el informe renderizado
+modelsummary(
+  modlist,
+  statistic = "({std.error})",
+  stars     = TRUE,
+  title     = "Indice de confianza institucional – Modelos OLS con SE HC3"
+)
+
+```
+
+## Indicador: Satisfacción con la democracia
+
+
+### Especificaciones
+
+```{r}
+cdl_t <- cdl_t %>%  mutate(swd_d = if_else(swd %in% c("Satisfecho", "Muy satisfecho"),1L, 0L) )
+```
+
+
+```{r message=FALSE, warning=FALSE}
+
+# 1. Modelo simple: cl_index
+d3_swd1Logit <- glm(swd_d ~ cl_index,  data   = cdl_t,  family = binomial(link = "logit"))
+
+# 2. Modelo simple: theta_nps
+d3_swd2Logit <- glm(  swd_d ~ theta_nps,  data   = cdl_t,  family = binomial(link = "logit"))
+
+# 3. Modelo con controles políticos
+d3_swd3Logit <- glm(  swd_d ~ cl_index + theta_nps + ideol + partyid,  data   = cdl_t,  family = binomial(link = "logit"))
+
+# 4. Modelo completo
+d3_swd4Logit <- glm(  swd_d ~ cl_index + theta_nps + ideol + partyid + edad + sexo + ned + empleo_bin + estrato, data   = cdl_t,
+  family = binomial(link = "logit"))
+```
+
+
+### Tabulación
+
+
+```{r}
+
+modlist <- list(d3_swd1Logit, d3_swd2Logit, d3_swd3Logit, d3_swd4Logit)
+
+# 1) Guardar en Word
+modelsummary(
+  modlist,
+  exponentiate = TRUE,
+  statistic    = "conf.int",
+  conf_level   = 0.95,
+  fmt          = 2,
+  stars        = TRUE,
+  glance       = list(~ tibble(
+    Observaciones = nobs(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  title        = "SWD – Modelos logit",
+  notes        = "IC al 95%; códigos: + p<0.10; * p<0.05; ** p<0.01; *** p<0.001",
+  output       = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D3swd_LOGIT.docx"
+)
+
+
+modelsummary(
+  modlist,
+  exponentiate = TRUE,
+  statistic    = "conf.int",
+  conf_level   = 0.95,
+  fmt          = 2,
+  stars        = TRUE,
+  glance       = list(~ tibble(
+    Observaciones = nobs(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  title        = "SWD – Modelos logit")
+
+```
+
+
+
+# Dimensión 4: Evaluación del desempeño del régimen
+
+## Indicador: Involucramiento con normas y procedimientos 
+
+```{r}
+
+cdl_t <- cdl_t %>% 
+  mutate(
+    # Colapsar las categorías
+    asist_rel = fct_collapse(nc_1,
+      Nunca     = "Nunca", Ocasional = "1 o 2 veces al año",Frecuente = c("1 o 2 veces al mes", "1 vez por semana") ),
+    asist_par = fct_collapse(nc_2,Nunca     = "Nunca",Ocasional = c("1 o 2 veces al año", "1 o 2 veces al mes") ),
+    asist_vec = fct_collapse(nc_3,Nunca     = "Nunca",Ocasional = "1 o 2 veces al año",
+      Frecuente = c("1 o 2 veces al mes", "1 vez por semana"))) %>%
+  # Convertir sólo asist_rel y asist_vec en factores ordenados
+  mutate( asist_rel = factor(asist_rel, levels = c("Nunca", "Ocasional", "Frecuente"),
+                       ordered = TRUE),
+    asist_vec = factor(asist_vec,   levels = c("Nunca", "Ocasional", "Frecuente"),
+                       ordered = TRUE))
+
+```
+
+## Indicador: Asistencia a reuniones religiosas
+
+### Especificaciones
+
+
+```{r}
+
+# 1) Asistencia a reuniones religiosas (ordinal)
+rel_ord1 <- polr(asist_rel ~ cl_index, data = cdl_t, Hess = TRUE)
+rel_ord2 <- polr(asist_rel ~ theta_nps, data = cdl_t, Hess = TRUE)
+rel_ord3 <- polr(asist_rel ~ cl_index + theta_nps + ideol + partyid, data = cdl_t, Hess = TRUE)
+rel_ord4 <- polr(asist_rel ~ cl_index + theta_nps + ideol + partyid + edad + sexo + ned + empleo_bin + estrato,
+                 data = cdl_t, Hess = TRUE)
+```
+
+### Tabualación
+
+```{r}
+# Lista de modelos
+modelsummary::modelsummary(
+  list("1"=rel_ord1, "2"=rel_ord2, "3"=rel_ord3, "4"=rel_ord4),
+  exponentiate  = TRUE,        # odds ratios
+  statistic     = "conf.int",  # IC en lugar de SE
+  conf_level    = 0.95,
+  fmt           = 2,
+  stars         = TRUE,        # + p<.10; * p<.05; etc.
+  glance        = list(~ tibble(
+    Observaciones = nobs(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+ output    = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D4religion_ORD.docx",
+  title    = "Asistencia a reuniones religiosas- Modelos Ordinales"
+)
+
+modelsummary::modelsummary(
+  list("1"=rel_ord1, "2"=rel_ord2, "3"=rel_ord3, "4"=rel_ord4),
+  exponentiate  = TRUE,        # odds ratios
+  statistic     = "conf.int",  # IC en lugar de SE
+  conf_level    = 0.95,
+  fmt           = 2,
+  stars         = TRUE,        # + p<.10; * p<.05; etc.
+  glance        = list(~ tibble(
+    Observaciones = nobs(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  title    = "Asistencia a reuniones religiosas- Modelos Ordinales")
+```
+
+## Indicador: Asistencia a reuniones con partidos políticos
+
+### Especificaciones
+
+```{r}
+# 2) Asistencia a reuniones partidarias (binaria → logit)
+
+par_log1 <- glm(asist_par ~ cl_index, data = cdl_t, family = binomial(link = "logit"))
+par_log2 <- glm(asist_par ~ theta_nps, data = cdl_t, family = binomial(link = "logit"))
+par_log3 <- glm(asist_par ~ cl_index + theta_nps + ideol + partyid,  data = cdl_t, family = binomial(link = "logit"))
+par_log4 <- glm(asist_par ~ cl_index + theta_nps + ideol + partyid + edad + sexo + ned + empleo_bin + estrato, data = cdl_t, family = binomial(link = "logit"))
+```
+
+### Tabulación
+
+```{r}
+modelsummary::modelsummary(
+  list("1"=par_log1, "2"=par_log2, "3"=par_log3, "4"=par_log4),
+  exponentiate = TRUE,
+  statistic    = "conf.int",
+  fmt          = 2,
+  glance       = list(~ tibble(
+    AIC           = AIC(.),
+    BIC           = BIC(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  title  = "Logit binario – Asistencia partidaria",
+  notes  = "Odds ratios (IC 95 %); AIC, BIC y McFadden’s R²"
+)
+
+modelsummary::modelsummary(
+  list("1"=par_log1, "2"=par_log2, "3"=par_log3, "4"=par_log4),
+  exponentiate = TRUE,
+  statistic    = "conf.int",
+  fmt          = 2,
+  glance       = list(~ tibble(
+    AIC           = AIC(.),
+    BIC           = BIC(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  output    = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D4partidos_LOGIT.docx",
+  title  = "Logit binario – Asistencia partidaria",
+  notes  = "Odds ratios (IC 95 %); AIC, BIC y McFadden’s R²"
+)
+```
+
+#### Indicador: Asistencia a juntas vecinales (ordinal)
+
+```{r}
+# 3) Asistencia a juntas vecinales (ordinal)
+vec_ord1 <- polr(asist_vec ~ cl_index, data = cdl_t, Hess = TRUE)
+vec_ord2 <- polr(asist_vec ~ theta_nps,  data = cdl_t, Hess = TRUE)
+vec_ord3 <- polr(asist_vec ~ cl_index + theta_nps + ideol + partyid,data = cdl_t, Hess = TRUE)
+vec_ord4 <- polr(asist_vec ~ cl_index + theta_nps + ideol + partyid + edad + sexo + ned + empleo_bin + estrato,  data = cdl_t, Hess = TRUE)
 
 ```
 
 
 ```{r}
-# 1) Instala y carga solo una vez
-if (!require(brant)) install.packages("brant")
-library(brant)
-library(performance)
+# Lista de modelos
+modelsummary::modelsummary(
+  list("1"=vec_ord1, "2"=vec_ord2, "3"=vec_ord3, "4"=vec_ord4),
+  exponentiate  = TRUE,        # odds ratios
+  statistic     = "conf.int",  # IC en lugar de SE
+  conf_level    = 0.95,
+  fmt           = 2,
+  stars         = TRUE,        # + p<.10; * p<.05; etc.
+  glance        = list(~ tibble(
+    Observaciones = nobs(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  title    = "Asistencia a reuniones vecinales- Modelos Ordinales"
+)
 
-# 2) Recorre tus ocho modelos ordianles
-for (i in seq_len(8)) {
-  cat("\n\n====== dim2_ord", i, "======\n")
-  mod <- get(paste0("dim2_ord", i))
-  
-  # a) Chequea los supuestos básicos (usa residuos "normal" para polr)
-  performance::check_model(mod, residual_type = "normal")
-  
-  # b) Test de Brant para odds proporcionales
-  print(brant::brant(mod))
-}
+modelsummary::modelsummary(
+  list("1"=vec_ord1, "2"=vec_ord2, "3"=vec_ord3, "4"=vec_ord4),
+  exponentiate  = TRUE,        # odds ratios
+  statistic     = "conf.int",  # IC en lugar de SE
+  conf_level    = 0.95,
+  fmt           = 2,
+  stars         = TRUE,        # + p<.10; * p<.05; etc.
+  glance        = list(~ tibble(
+    Observaciones = nobs(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  output    = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D4vecinos_ORD.docx",
+  title    = "Asistencia a reuniones vecinales- Modelos Ordinales")
+```
 
+### Indicador: Aprobación municipal
+
+
+```{r}
+
+cdl_t <- cdl_t %>%  mutate(aprob_d = if_else(aprobacion == "Si", 1L, 0L))
+
+```
+
+#### Especificaciones 
+```{r}
+
+apr_log1 <- glm(aprob_d ~ cl_index, data = cdl_t, family = binomial(link = "logit"))
+apr_log2 <- glm(aprob_d ~ theta_nps, data = cdl_t, family = binomial(link = "logit"))
+apr_log3 <- glm(aprob_d ~ cl_index + theta_nps + ideol + partyid,  data = cdl_t, family = binomial(link = "logit"))
+apr_log4 <- glm(aprob_d ~ cl_index + theta_nps + ideol + partyid + edad + sexo + ned + empleo_bin + estrato, data = cdl_t, family = binomial(link = "logit"))
 ```
 
 
 
+```{r}
+modelsummary::modelsummary(
+  list("1"=apr_log1, "2"=apr_log2, "3"=apr_log3, "4"=apr_log4),
+  exponentiate  = TRUE,        # odds ratios
+  statistic     = "conf.int",  # IC en lugar de SE
+  conf_level    = 0.95,
+  fmt           = 2,
+  stars         = TRUE,        # + p<.10; * p<.05; etc.
+  glance        = list(~ tibble(
+    Observaciones = nobs(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  # output    = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D5apr_binomial.docx",
+  title    = "Aprobación municial - Modelos binarios")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+modelsummary::modelsummary(
+  list("1"=apr_log1, "2"=apr_log2, "3"=apr_log3, "4"=apr_log4),
+  exponentiate  = TRUE,        # odds ratios
+  statistic     = "conf.int",  # IC en lugar de SE
+  conf_level    = 0.95,
+  fmt           = 2,
+  stars         = TRUE,        # + p<.10; * p<.05; etc.
+  glance        = list(~ tibble(
+    Observaciones = nobs(.),
+    McFadden_R2   = pscl::pR2(.)["McFadden"]
+  )),
+  output    = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D5apr_binomial.docx",
+  title    = "Aprobación municial - Modelos binarios")
+```
 
 
 
