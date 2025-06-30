@@ -42,7 +42,7 @@ knitr::opts_knit$set(
 
 Este flujo de trabajo resume el procesamiento de datos aplicado a una muestra de electores al nivel distrital. 
 
-```{r setup-libraries, include=TRUE, warning=FALSE}
+```{r setup-libraries, include=TRUE, warning=FALSE, message=FALSE}
 
 lapply(c(
   "tidyverse",  
@@ -308,7 +308,19 @@ cdl[imp_vars] <- complete(imp, 1)
 ## Análisis descriptivo
 
 ```{r}
-skimr::skim(cdl) %>% as_tibble()
+library(kableExtra)
+library(skimr)
+
+# Prepara la tabla y el título
+tbl <- skimr::skim(cdl) %>% as_tibble()
+
+cat("**Resumen de cdl**\n\n")
+
+# Imprime la tabla con scroll vertical
+tbl %>%
+  kable("html", booktabs = TRUE) %>%
+  kable_styling(full_width = FALSE) %>%
+  scroll_box(height = "400px", width = "100%")
 ```
 ### Distribuciones (Gráficos)
 
