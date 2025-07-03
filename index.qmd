@@ -27,52 +27,29 @@ editor:
 #| include: false
 
 knitr::opts_knit$set(
-  echo = TRUE,               # muestra el código
-  warning = FALSE,           # no muestra advertencias
-  message = FALSE,           # no muestra mensajes
-  fig.width = 8,            # ancho de las figuras
-  fig.height = 5,           # alto de las figuras
-  fig.align = "center",    # alinea las figuras al centro
-  dpi = 300)           # resolución de las figuras
+  echo = TRUE,     # muestra el código
+  warning = FALSE, # no muestra advertencias
+  message = FALSE, # no muestra mensajes
+  fig.width = 8,   # ancho de las figuras
+  fig.height = 5,  # alto de las figuras
+  fig.align = "center", # alinea las figuras al centro
+  dpi = 300)            # resolución de las figuras
   
 ```
 
 
-
 ```{r setup-libraries, include=FALSE, echo=TRUE, warning=FALSE, message=FALSE}
 
-lapply(c(
-  "tidyverse",  
-  "readxl",       
-  "writexl",
-  "skimr",
-  "kableExtra",
-  "mice",
-  "miceadds",
-  "naniar",
-  "modelsummary",
-  "haven",
-  "janitor",
-  "labelled",
-  "estimatr",
-  "MASS",
-  "pscl",
-  "psych",
-  "mirt",
-  "sandwich",
-  "lmtest"
-), library, character.only = TRUE)
+lapply(c("tidyverse","readxl","writexl","skimr","kableExtra","mice","miceadds","naniar","modelsummary",
+  "haven",  "janitor",  "labelled",  "estimatr",  "MASS",  "pscl",  "psych",  "mirt",  "sandwich",
+  "lmtest"), library, character.only = TRUE)
 
 ```
-
-
 
 
 # Data wrangling
 
 En esta sección se realiza la importación inicial del conjunto de datos y una limpieza preliminar. Se eliminan variables irrelevantes y se estandariza el formato del texto, asegurando uniformidad en minúsculas, espacios eliminados y capitalización consistente.
-
-
 
 ```{r importaciondedatos}
 cdl <- read_xlsx("E:/Bases de datos/datasets_private/Dataset de encuestas.xlsx") %>% 
@@ -470,7 +447,7 @@ numero <- c("Nada"  = 0,"Poco"  = 1, "Algo"  = 2,  "Mucho" = 3)
 # 2. Recodificar → numérico 0–3 y filtrar casos completos -----------------
 vars_trust <- cdl %>% dplyr::  mutate(across(dplyr::starts_with("trust"),
            ~ dplyr :: recode(.x, !!!numero)  %>%  as.integer())) %>% 
-  dplyr:: select(starts_with("trust")) 
+  dplyr:: select(c(trust1, trust2, trust3, trust4, trust6)) 
 
 # 3. Matriz de correlaciones policóricas -----------------------------------
 matriz_rho <- vars_trust %>%   as.data.frame() %>%                        
@@ -555,7 +532,7 @@ nps_data1 <- cdl %>% dplyr:: select(nps_1, nps_2, nps_3, nps_4, nps_5) %>%
 
 # Se ajusta un modelo de Respuesta Graduada con un único factor subyacente, que asume que cada ítem discrimina en la misma dimensión latente de partidismo negativo
 
-mod_nps1 <- mirt(data = nps_data1, model = 1, itemtype = "graded")
+mod_nps1 <- mirt(data = nps_data1, model = 1, itemtype = "graded", verbose = FALSE)
 
 #Se extraen los parámetros de discriminación (a) y umbrales (b) de cada ítem, se redondean a tres decimales:
 
@@ -580,14 +557,14 @@ plot(mod_nps1, type = "trace", which.items = 1:5)
 summary(mod_nps1)
 ```
 
-No se obtienen resultados alentadores, ahora probabmos retirando un item 
+No se obtienen resultados alentadores, ahora probamos retirando un item 
 
 
 ```{r}
 nps_data2 <- cdl %>%
   dplyr:: select(nps_1, nps_2, nps_5) %>%  mutate(across(everything(), as.numeric))
 
-mod_nps2 <- mirt(data = nps_data2, model = 1, itemtype = "graded")
+mod_nps2 <- mirt(data = nps_data2, model = 1, itemtype = "graded", verbose = FALSE)
 
 params_raw <- coef(mod_nps2, simplify = TRUE)$items %>%  as.data.frame() %>% 
   rownames_to_column("item")
@@ -629,7 +606,7 @@ cdl <- cdl %>%
 
 cdl_t <- cdl %>% 
   # 1. Centrar y escalar numéricas seleccionadas (incluye vd_1, vd_2, vd_3)
-  mutate(across(c(edad, d7, starts_with("vd_")), 
+  mutate(across(c(edad, d7,cl_index, starts_with("vd_")), 
                 ~ as.numeric(scale(.x)))) %>% 
   
   # 2. Reubicar categorías con ≤ 5 casos en "Otro"
@@ -638,7 +615,7 @@ cdl_t <- cdl %>%
   
   # 3. Índices compuestos
   mutate(
-    trust_index         = rowMeans(across(trust1:trust7, ~ as.numeric(.x)),    na.rm = TRUE),
+    trust_index         = rowMeans(across(c(trust1, trust2, trust3, trust4, trust6), ~ as.numeric(.x)),    na.rm = TRUE),
     opos_index   = rowMeans(across(c(vd_1, vd_2, vd_3),   ~ as.numeric(.x)), na.rm = TRUE)
   ) %>% 
   
@@ -665,7 +642,6 @@ cdl_t <- cdl %>%
 ```
 
 
-
 # Modelamiento 
 
 # Dimensión 1: Apego a la comunidad
@@ -674,7 +650,7 @@ Esta dimensión explora el grado de orgullo y apego que sienten los ciudadanos h
 
 ## Indicador: Orgullo distrital  
 
-#### Modelos OLS 
+### Especificaciones
 
 ```{r}
 
@@ -817,9 +793,9 @@ modelsummary(
 ```
 
 
-### Indicador: Tolerancia a la oposición
+## Indicador: Tolerancia a la oposición
 
-#### Especifcaciones
+### Especifcaciones
 
 
 ```{r}
@@ -833,7 +809,7 @@ d2_opo4OLS <- lm_robust(opos_index~ cl_index + theta_nps + ideol + partyid +  ed
 ```
 
 
-#### Tablas
+### Tablas
 
 
 ```{r}
@@ -864,6 +840,11 @@ modelsummary(
 En esta dimensión se analiza la confianza institucional y la satisfacción con la democracia local mediante modelos de regresión lineal robusta y regresión logística binaria.
 
 ## Indicador: Confianza institucional 
+
+```{r}
+hist(cdl_t$trust_index)
+```
+
 
 
 ### Especificaciones
@@ -974,7 +955,7 @@ modelsummary(
 
 Aquí se mide la participación ciudadana en distintas actividades comunitarias (reuniones religiosas, políticas y vecinales), usando modelos ordinales y binarios según corresponda a cada indicador.
 
-## Indicador: Involucramiento con normas y procedimientos 
+
 
 ```{r}
 
@@ -1044,52 +1025,87 @@ modelsummary::modelsummary(
 
 ## Indicador: Asistencia a reuniones con partidos políticos
 
+```{r}
+table(cdl_t$asist_par)
+```
 
 ### Especificaciones
 
 ```{r}
-# 2) Asistencia a reuniones partidarias (binaria → logit)
+library(brglm2)       # brglm() para logit Firth
+library(modelsummary) # tabulación
+library(pscl)         # pR2
+library(pROC)         # AUC
+library(PRROC)        # AUPRC
+library(DescTools)    # BrierScore
+library(tibble)       # add_column
+```
 
-par_log1 <- glm(asist_par ~ cl_index, data = cdl_t, family = binomial(link = "logit"))
-par_log2 <- glm(asist_par ~ theta_nps, data = cdl_t, family = binomial(link = "logit"))
-par_log3 <- glm(asist_par ~ cl_index + theta_nps + ideol + partyid,  data = cdl_t, family = binomial(link = "logit"))
-par_log4 <- glm(asist_par ~ cl_index + theta_nps + ideol + partyid + edad + sexo + ned + empleo_bin + estrato, data = cdl_t, family = binomial(link = "logit"))
+
+```{r}
+par_log1 <- glm(asist_par ~ cl_index,  data   = cdl_t,family = binomial("logit"),  method = brglm2::brglmFit,
+                type   = "AS_mean")
+
+par_log2 <- glm(asist_par ~ theta_nps,  data   = cdl_t,       family = binomial("logit"),
+                method = brglm2::brglmFit,
+                type   = "AS_mean")
+
+par_log3 <- glm(asist_par ~ cl_index + theta_nps + ideol + partyid,  data   = cdl_t,    family = binomial("logit"),
+                method = brglm2::brglmFit,
+                type   = "AS_mean")
+
+par_log4 <- glm(asist_par ~ cl_index + theta_nps + ideol + partyid + edad + sexo + ned + empleo_bin + estrato,
+                data   = cdl_t,
+                family = binomial("logit"),
+                method = brglm2::brglmFit,
+                type   = "AS_mean")
+
+models <- list("1" = par_log1, "2" = par_log2, "3" = par_log3, "4" = par_log4)
+
+
+add_quality <- function(m) {
+  pr <- predict(m, type = "response")
+  auc   <- as.numeric(pROC::roc(cdl_t$asist_par, pr)$auc)
+  auprc <- PRROC::pr.curve(scores.class0 = pr[cdl_t$asist_par == 1],
+                           scores.class1 = pr[cdl_t$asist_par == 0])$auc.integral
+  brier <- DescTools::BrierScore(m)
+  tibble(
+    AIC         = AIC(m),
+    BIC         = BIC(m),
+    McFadden_R2 = pscl::pR2(m)["McFadden"],
+    AUC         = round(auc, 2),
+    AUPRC       = round(auprc, 2),
+    Brier       = round(brier, 3)
+  )
+}
 ```
 
 ### Tabulación
 
-```{r}
-modelsummary::modelsummary(
-  list("1"=par_log1, "2"=par_log2, "3"=par_log3, "4"=par_log4),
-  exponentiate = TRUE,
-  statistic    = "conf.int",
-  fmt          = 2,
-  glance       = list(~ tibble(
-    AIC           = AIC(.),
-    BIC           = BIC(.),
-    McFadden_R2   = pscl::pR2(.)["McFadden"]
-  )),
-  title  = "Logit binario – Asistencia partidaria",
-  notes  = "Odds ratios (IC 95 %); AIC, BIC y McFadden’s R²"
-)
 
-modelsummary::modelsummary(
-  list("1"=par_log1, "2"=par_log2, "3"=par_log3, "4"=par_log4),
-  exponentiate = TRUE,
+```{r}
+
+modelsummary(
+  models,
+  exponentiate = TRUE,          # odds ratios
   statistic    = "conf.int",
+  stars        = TRUE,   # IC 95 %
   fmt          = 2,
-  glance       = list(~ tibble(
-    AIC           = AIC(.),
-    BIC           = BIC(.),
-    McFadden_R2   = pscl::pR2(.)["McFadden"]
-  )),
-  output    = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D4partidos_LOGIT.docx",
-  title  = "Logit binario – Asistencia partidaria",
-  notes  = "Odds ratios (IC 95 %); AIC, BIC y McFadden’s R²"
+  glance       = list(~ add_quality(.)),
+  title        = "Logit penalizado (Firth) – Asistencia partidaria",
+  notes        = paste(
+    "Odds ratios (IC 95 %); AIC, BIC, pseudo-R² de McFadden,",
+    "AUC-ROC, AUPRC y Brier score incluidos para eventos raros"
+  ),
+  output       = "E:/Rstudio projects/DA_licenciatura/Exports/Tables/D4partidos_FIRTH.docx"
 )
 ```
 
-#### Indicador: Asistencia a juntas vecinales (ordinal)
+
+
+## Indicador: Asistencia a juntas vecinales (ordinal)
+
+### Especificaciones
 
 ```{r}
 # 3) Asistencia a juntas vecinales (ordinal)
@@ -1100,6 +1116,7 @@ vec_ord4 <- polr(asist_vec ~ cl_index + theta_nps + ideol + partyid + edad + sex
 
 ```
 
+### Tabulación
 
 ```{r}
 # Lista de modelos
@@ -1137,7 +1154,8 @@ modelsummary::modelsummary(
 
 Esta dimensión examina específicamente la aprobación municipal utilizando modelos logísticos binarios para determinar qué factores están asociados a la aprobación del gobierno local.
 
-### Indicador: Aprobación municipal
+## Indicador: Aprobación municipal
+
 
 
 ```{r}
@@ -1146,7 +1164,7 @@ cdl_t <- cdl_t %>%  mutate(aprob_d = if_else(aprobacion == "Si", 1L, 0L))
 
 ```
 
-#### Especificaciones 
+### Especificaciones 
 ```{r}
 
 apr_log1 <- glm(aprob_d ~ cl_index, data = cdl_t, family = binomial(link = "logit"))
@@ -1155,7 +1173,7 @@ apr_log3 <- glm(aprob_d ~ cl_index + theta_nps + ideol + partyid,  data = cdl_t,
 apr_log4 <- glm(aprob_d ~ cl_index + theta_nps + ideol + partyid + edad + sexo + ned + empleo_bin + estrato, data = cdl_t, family = binomial(link = "logit"))
 ```
 
-
+### Tabulación
 
 ```{r}
 modelsummary::modelsummary(
@@ -1187,9 +1205,101 @@ modelsummary::modelsummary(
   title    = "Aprobación municial - Modelos binarios")
 ```
 
+# Graficos
+
+## Confianza institucional
 
 
+```{r, fig.height=15, fig.width=10}
+library(tidyverse)
+
+conf_long <- cdl_t %>% 
+  pivot_longer(
+    cols      = c(trust1, trust2, trust3, trust4, trust5, trust6, trust7),
+    names_to  = "institucion",
+    values_to = "confianza"
+  ) %>% 
+  mutate(
+    institucion = recode(institucion,
+      trust1 = "Municipio",
+      trust2 = "Serenazgo",
+      trust3 = "DEMUNA",
+      trust4 = "Serv.salud",
+      trust5 = "Iglesias",
+      trust6 = "CIAM",
+      trust7 = "Asoc.pobladores"
+    ),
+    confianza = factor(confianza,
+                       levels   = c("Nada", "Poco", "Algo", "Mucho"),
+                       ordered  = TRUE)
+  )
+
+# 2) Media y mediana de cl_index por nivel de confianza e institución
+cl_summary <- conf_long %>% 
+  group_by(institucion, confianza) %>% 
+  summarise(
+    n           = n(),
+    media_cli   = mean(cl_index, na.rm = TRUE),
+    mediana_cli = median(cl_index, na.rm = TRUE)
+  ) %>% 
+  arrange(institucion, desc(confianza))   # pone "Mucho" arriba
+
+# 3) Idem para partidarismo negativo (theta_nps)
+pn_summary <- conf_long %>% 
+  group_by(institucion, confianza) %>% 
+  summarise(
+    n            = n(),
+    media_pn     = mean(theta_nps, na.rm = TRUE),
+    mediana_pn   = median(theta_nps, na.rm = TRUE)
+  ) %>% 
+  arrange(institucion, desc(confianza))
+```
 
 
+```{r, fig.height=15, fig.width=10}
+levels_inst <- c("Municipio",
+                 "Serenazgo",
+                 "DEMUNA",
+                 "Serv.salud",   # asegúrate de usar el mismo texto
+                 "Iglesias",
+                 "CIAM",
+                 "Asoc.pobladores")
 
+conf_long <- cdl_t %>% 
+  pivot_longer(cols = c(trust1:trust7),
+               names_to  = "institucion",
+               values_to = "confianza") %>% 
+  mutate(
+    institucion = recode(institucion,
+      trust1 = "Municipio",
+      trust2 = "Serenazgo",
+      trust3 = "DEMUNA",
+      trust4 = "Serv.salud",
+      trust5 = "Iglesias",
+      trust6 = "CIAM",
+      trust7 = "Asoc.pobladores"
+    ),
+    institucion = factor(institucion, levels = levels_inst),   # <- ❶
+    confianza   = factor(confianza,
+                         levels  = c("Nada", "Poco", "Algo", "Mucho"),
+                         ordered = TRUE)
+  )
+```
+
+
+```{r, fig.height=15, fig.width=10}
+conf_long %>% 
+  pivot_longer(cols = c(cl_index, theta_nps),
+               names_to  = "predictor",
+               values_to = "valor") %>% 
+  mutate(predictor = recode(predictor,
+                            cl_index  = "Tolerancia al clientelismo",
+                            theta_nps = "Partidismo negativo")) %>% 
+  ggplot(aes(y = confianza, x = valor)) +
+  geom_boxplot(fill = "#A1B3D1") +
+  facet_grid(institucion ~ predictor, scales = "free_x") +
+  labs(x = NULL, y = "Confianza") +
+  theme_gray(base_size = 13)
+
+```
 
